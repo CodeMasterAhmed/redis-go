@@ -1,40 +1,58 @@
 package main
 
 import (
-	"fmt"
+	"io"
+	"log"
 	"net"
 )
 
 func main() {
-	fmt.Println("Listening on port :6379")
+	if err := listenAndServe(":6379", NewStore()); err != nil {
+		log.Fatal(err)
+	}
+}
 
-	// Create a new server
-	l, err := net.Listen("tcp", ":6379")
+func listenAndServe(addr string, store *Store) error {
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 
-	// Listen for connections
-	conn, err := l.Accept()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	log.Printf("Listening on %s", addr)
+	return serve(listener, store)
+}
 
-	defer conn.Close()
+func serve(listener net.Listener, store *Store) error {
+	defer listener.Close()
 
 	for {
-		resp := NewResp(conn)
+		conn, err := listener.Accept()
+		if err != nil {
+			return err
+		}
+
+		go handleConnection(conn, store)
+	}
+}
+
+func handleConnection(conn net.Conn, store *Store) {
+	defer conn.Close()
+
+	resp := NewResp(conn)
+	writer := NewWriter(conn)
+
+	for {
 		value, err := resp.Read()
 		if err != nil {
-			fmt.Println(err)
+			if err != io.EOF {
+				log.Printf("read error from %s: %v", conn.RemoteAddr(), err)
+			}
 			return
 		}
 
-		_ = value
-
-		writer := NewWriter(conn)
-		writer.Write(Value{typ: "string", str: "OK"})
+		if err := writer.Write(handleCommand(value, store)); err != nil {
+			log.Printf("write error to %s: %v", conn.RemoteAddr(), err)
+			return
+		}
 	}
 }
