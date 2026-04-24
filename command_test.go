@@ -1,0 +1,92 @@
+package main
+
+import "testing"
+
+func TestHandleCommandPing(t *testing.T) {
+	store := NewStore()
+
+	got := handleCommand(commandValue("PING"), store)
+	if got.typ != typeString || got.str != "PONG" {
+		t.Fatalf("PING = %#v, want PONG simple string", got)
+	}
+
+	got = handleCommand(commandValue("PING", "hello"), store)
+	if got.typ != typeBulk || got.bulk != "hello" {
+		t.Fatalf("PING hello = %#v, want hello bulk string", got)
+	}
+}
+
+func TestHandleCommandEcho(t *testing.T) {
+	got := handleCommand(commandValue("ECHO", "hello"), NewStore())
+	if got.typ != typeBulk || got.bulk != "hello" {
+		t.Fatalf("ECHO = %#v, want hello bulk string", got)
+	}
+}
+
+func TestHandleCommandSetGet(t *testing.T) {
+	store := NewStore()
+
+	got := handleCommand(commandValue("SET", "name", "Ahmed"), store)
+	if got.typ != typeString || got.str != "OK" {
+		t.Fatalf("SET = %#v, want OK", got)
+	}
+
+	got = handleCommand(commandValue("GET", "name"), store)
+	if got.typ != typeBulk || got.bulk != "Ahmed" {
+		t.Fatalf("GET existing = %#v, want Ahmed", got)
+	}
+
+	got = handleCommand(commandValue("GET", "missing"), store)
+	if got.typ != typeNull {
+		t.Fatalf("GET missing = %#v, want null", got)
+	}
+}
+
+func TestHandleCommandDeleteAndExists(t *testing.T) {
+	store := NewStore()
+	store.Set("name", "Ahmed")
+	store.Set("city", "Hyderabad")
+
+	got := handleCommand(commandValue("EXISTS", "name", "missing", "city"), store)
+	if got.typ != typeInteger || got.num != 2 {
+		t.Fatalf("EXISTS = %#v, want 2", got)
+	}
+
+	got = handleCommand(commandValue("DEL", "name", "missing"), store)
+	if got.typ != typeInteger || got.num != 1 {
+		t.Fatalf("DEL = %#v, want 1", got)
+	}
+
+	got = handleCommand(commandValue("EXISTS", "name", "city"), store)
+	if got.typ != typeInteger || got.num != 1 {
+		t.Fatalf("EXISTS after DEL = %#v, want 1", got)
+	}
+}
+
+func TestHandleCommandErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		value Value
+	}{
+		{name: "unknown command", value: commandValue("NOPE")},
+		{name: "wrong arity", value: commandValue("GET")},
+		{name: "not array", value: Value{typ: typeBulk, bulk: "PING"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := handleCommand(tt.value, NewStore())
+			if got.typ != typeError || got.str == "" {
+				t.Fatalf("handleCommand() = %#v, want error", got)
+			}
+		})
+	}
+}
+
+func commandValue(parts ...string) Value {
+	values := make([]Value, 0, len(parts))
+	for _, part := range parts {
+		values = append(values, Value{typ: typeBulk, bulk: part})
+	}
+	return Value{typ: typeArray, array: values}
+}
