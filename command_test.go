@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestHandleCommandPing(t *testing.T) {
 	store := NewStore()
@@ -39,6 +42,94 @@ func TestHandleCommandSetGet(t *testing.T) {
 	got = handleCommand(commandValue("GET", "missing"), store)
 	if got.typ != typeNull {
 		t.Fatalf("GET missing = %#v, want null", got)
+	}
+}
+
+func TestHandleCommandSetWithTTL(t *testing.T) {
+	now := time.Date(2026, time.April, 24, 12, 0, 0, 0, time.UTC)
+	store := testStore(now)
+
+	got := handleCommand(commandValue("SET", "name", "Ahmed", "EX", "10"), store)
+	if got.typ != typeString || got.str != "OK" {
+		t.Fatalf("SET EX = %#v, want OK", got)
+	}
+
+	got = handleCommand(commandValue("TTL", "name"), store)
+	if got.typ != typeInteger || got.num != 10 {
+		t.Fatalf("TTL before expiry = %#v, want 10", got)
+	}
+
+	got = handleCommand(commandValue("GET", "name"), store)
+	if got.typ != typeBulk || got.bulk != "Ahmed" {
+		t.Fatalf("GET before expiry = %#v, want Ahmed", got)
+	}
+
+	store.now = func() time.Time { return now.Add(11 * time.Second) }
+
+	got = handleCommand(commandValue("GET", "name"), store)
+	if got.typ != typeNull {
+		t.Fatalf("GET after expiry = %#v, want null", got)
+	}
+
+	got = handleCommand(commandValue("TTL", "name"), store)
+	if got.typ != typeInteger || got.num != -2 {
+		t.Fatalf("TTL after expiry = %#v, want -2", got)
+	}
+}
+
+func TestHandleCommandExpireAndPersist(t *testing.T) {
+	now := time.Date(2026, time.April, 24, 12, 0, 0, 0, time.UTC)
+	store := testStore(now)
+	store.Set("name", "Ahmed")
+
+	got := handleCommand(commandValue("TTL", "name"), store)
+	if got.typ != typeInteger || got.num != -1 {
+		t.Fatalf("TTL without expiry = %#v, want -1", got)
+	}
+
+	got = handleCommand(commandValue("EXPIRE", "name", "20"), store)
+	if got.typ != typeInteger || got.num != 1 {
+		t.Fatalf("EXPIRE existing = %#v, want 1", got)
+	}
+
+	got = handleCommand(commandValue("TTL", "name"), store)
+	if got.typ != typeInteger || got.num != 20 {
+		t.Fatalf("TTL after EXPIRE = %#v, want 20", got)
+	}
+
+	got = handleCommand(commandValue("PERSIST", "name"), store)
+	if got.typ != typeInteger || got.num != 1 {
+		t.Fatalf("PERSIST existing = %#v, want 1", got)
+	}
+
+	got = handleCommand(commandValue("TTL", "name"), store)
+	if got.typ != typeInteger || got.num != -1 {
+		t.Fatalf("TTL after PERSIST = %#v, want -1", got)
+	}
+
+	got = handleCommand(commandValue("EXPIRE", "missing", "20"), store)
+	if got.typ != typeInteger || got.num != 0 {
+		t.Fatalf("EXPIRE missing = %#v, want 0", got)
+	}
+}
+
+func TestHandleCommandRejectsInvalidTTL(t *testing.T) {
+	tests := []struct {
+		name  string
+		value Value
+	}{
+		{name: "set negative", value: commandValue("SET", "name", "Ahmed", "EX", "-1")},
+		{name: "set bad unit", value: commandValue("SET", "name", "Ahmed", "BAD", "10")},
+		{name: "expire zero", value: commandValue("EXPIRE", "name", "0")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := handleCommand(tt.value, NewStore())
+			if got.typ != typeError {
+				t.Fatalf("handleCommand() = %#v, want error", got)
+			}
+		})
 	}
 }
 
@@ -89,4 +180,10 @@ func commandValue(parts ...string) Value {
 		values = append(values, Value{typ: typeBulk, bulk: part})
 	}
 	return Value{typ: typeArray, array: values}
+}
+
+func testStore(now time.Time) *Store {
+	store := NewStore()
+	store.now = func() time.Time { return now }
+	return store
 }
