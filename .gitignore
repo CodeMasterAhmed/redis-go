@@ -1,0 +1,6 @@
+.DS_Store
+redis-go
+redis-server
+*.test
+*.out
+coverage.out
