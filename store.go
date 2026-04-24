@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"sync"
 	"time"
 )
@@ -74,6 +75,28 @@ func (s *Store) Exists(keys ...string) int {
 		}
 	}
 	return found
+}
+
+func (s *Store) Increment(key string, delta int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.getLiveEntry(key)
+	if !ok {
+		value := delta
+		s.data[key] = storeEntry{value: strconv.Itoa(value)}
+		return value, nil
+	}
+
+	current, err := strconv.Atoi(entry.value)
+	if err != nil {
+		return 0, err
+	}
+
+	value := current + delta
+	entry.value = strconv.Itoa(value)
+	s.data[key] = entry
+	return value, nil
 }
 
 func (s *Store) Expire(key string, ttl time.Duration) bool {

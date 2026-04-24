@@ -45,6 +45,74 @@ func TestHandleCommandSetGet(t *testing.T) {
 	}
 }
 
+func TestHandleCommandMSetMGet(t *testing.T) {
+	store := NewStore()
+
+	got := handleCommand(commandValue("MSET", "name", "Ahmed", "city", "Hyderabad"), store)
+	if got.typ != typeString || got.str != "OK" {
+		t.Fatalf("MSET = %#v, want OK", got)
+	}
+
+	got = handleCommand(commandValue("MGET", "name", "missing", "city"), store)
+	if got.typ != typeArray || len(got.array) != 3 {
+		t.Fatalf("MGET = %#v, want three item array", got)
+	}
+	if got.array[0].typ != typeBulk || got.array[0].bulk != "Ahmed" {
+		t.Fatalf("MGET first value = %#v, want Ahmed", got.array[0])
+	}
+	if got.array[1].typ != typeNull {
+		t.Fatalf("MGET missing value = %#v, want null", got.array[1])
+	}
+	if got.array[2].typ != typeBulk || got.array[2].bulk != "Hyderabad" {
+		t.Fatalf("MGET third value = %#v, want Hyderabad", got.array[2])
+	}
+}
+
+func TestHandleCommandIncrDecr(t *testing.T) {
+	store := NewStore()
+
+	got := handleCommand(commandValue("INCR", "counter"), store)
+	if got.typ != typeInteger || got.num != 1 {
+		t.Fatalf("INCR missing = %#v, want 1", got)
+	}
+
+	got = handleCommand(commandValue("INCR", "counter"), store)
+	if got.typ != typeInteger || got.num != 2 {
+		t.Fatalf("INCR existing = %#v, want 2", got)
+	}
+
+	got = handleCommand(commandValue("DECR", "counter"), store)
+	if got.typ != typeInteger || got.num != 1 {
+		t.Fatalf("DECR existing = %#v, want 1", got)
+	}
+
+	store.Set("bad", "not-a-number")
+	got = handleCommand(commandValue("INCR", "bad"), store)
+	if got.typ != typeError {
+		t.Fatalf("INCR non-integer = %#v, want error", got)
+	}
+}
+
+func TestHandleCommandIncrKeepsTTL(t *testing.T) {
+	now := time.Date(2026, time.April, 24, 12, 0, 0, 0, time.UTC)
+	store := testStore(now)
+
+	got := handleCommand(commandValue("SET", "counter", "1", "EX", "10"), store)
+	if got.typ != typeString || got.str != "OK" {
+		t.Fatalf("SET EX = %#v, want OK", got)
+	}
+
+	got = handleCommand(commandValue("INCR", "counter"), store)
+	if got.typ != typeInteger || got.num != 2 {
+		t.Fatalf("INCR = %#v, want 2", got)
+	}
+
+	got = handleCommand(commandValue("TTL", "counter"), store)
+	if got.typ != typeInteger || got.num != 10 {
+		t.Fatalf("TTL after INCR = %#v, want 10", got)
+	}
+}
+
 func TestHandleCommandSetWithTTL(t *testing.T) {
 	now := time.Date(2026, time.April, 24, 12, 0, 0, 0, time.UTC)
 	store := testStore(now)

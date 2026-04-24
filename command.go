@@ -22,6 +22,14 @@ func handleCommand(value Value, store *Store) Value {
 		return setCommand(args, store)
 	case "GET":
 		return getCommand(args, store)
+	case "MSET":
+		return msetCommand(args, store)
+	case "MGET":
+		return mgetCommand(args, store)
+	case "INCR":
+		return incrCommand(args, store)
+	case "DECR":
+		return decrCommand(args, store)
 	case "DEL":
 		return delCommand(args, store)
 	case "EXISTS":
@@ -120,6 +128,56 @@ func getCommand(args []string, store *Store) Value {
 		return Value{typ: typeNull}
 	}
 	return Value{typ: typeBulk, bulk: value}
+}
+
+func msetCommand(args []string, store *Store) Value {
+	if len(args) == 0 || len(args)%2 != 0 {
+		return wrongArity("mset")
+	}
+
+	for i := 0; i < len(args); i += 2 {
+		store.Set(args[i], args[i+1])
+	}
+	return Value{typ: typeString, str: "OK"}
+}
+
+func mgetCommand(args []string, store *Store) Value {
+	if len(args) == 0 {
+		return wrongArity("mget")
+	}
+
+	values := make([]Value, 0, len(args))
+	for _, key := range args {
+		value, ok := store.Get(key)
+		if !ok {
+			values = append(values, Value{typ: typeNull})
+			continue
+		}
+		values = append(values, Value{typ: typeBulk, bulk: value})
+	}
+	return Value{typ: typeArray, array: values}
+}
+
+func incrCommand(args []string, store *Store) Value {
+	if len(args) != 1 {
+		return wrongArity("incr")
+	}
+	return incrementCommand(args[0], 1, store)
+}
+
+func decrCommand(args []string, store *Store) Value {
+	if len(args) != 1 {
+		return wrongArity("decr")
+	}
+	return incrementCommand(args[0], -1, store)
+}
+
+func incrementCommand(key string, delta int, store *Store) Value {
+	value, err := store.Increment(key, delta)
+	if err != nil {
+		return protocolError("ERR value is not an integer or out of range")
+	}
+	return Value{typ: typeInteger, num: value}
 }
 
 func delCommand(args []string, store *Store) Value {
