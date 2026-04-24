@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func handleCommand(value Value, store *Store) Value {
@@ -20,10 +22,24 @@ func handleCommand(value Value, store *Store) Value {
 		return setCommand(args, store)
 	case "GET":
 		return getCommand(args, store)
+	case "MSET":
+		return msetCommand(args, store)
+	case "MGET":
+		return mgetCommand(args, store)
+	case "INCR":
+		return incrCommand(args, store)
+	case "DECR":
+		return decrCommand(args, store)
 	case "DEL":
 		return delCommand(args, store)
 	case "EXISTS":
 		return existsCommand(args, store)
+	case "EXPIRE":
+		return expireCommand(args, store)
+	case "TTL":
+		return ttlCommand(args, store)
+	case "PERSIST":
+		return persistCommand(args, store)
 	default:
 		return protocolError(fmt.Sprintf("ERR unknown command '%s'", strings.ToLower(cmd)))
 	}
@@ -77,11 +93,29 @@ func echoCommand(args []string) Value {
 }
 
 func setCommand(args []string, store *Store) Value {
-	if len(args) != 2 {
+	if len(args) != 2 && len(args) != 4 {
 		return wrongArity("set")
 	}
-	store.Set(args[0], args[1])
+
+	ttl, ok := setTTL(args)
+	if !ok {
+		return protocolError("ERR invalid expire time in 'set' command")
+	}
+
+	store.SetWithTTL(args[0], args[1], ttl)
 	return Value{typ: typeString, str: "OK"}
+}
+
+func setTTL(args []string) (time.Duration, bool) {
+	if len(args) == 2 {
+		return 0, true
+	}
+
+	duration, ok := parseTTL(args[2], args[3])
+	if !ok {
+		return 0, false
+	}
+	return duration, true
 }
 
 func getCommand(args []string, store *Store) Value {
@@ -96,6 +130,56 @@ func getCommand(args []string, store *Store) Value {
 	return Value{typ: typeBulk, bulk: value}
 }
 
+func msetCommand(args []string, store *Store) Value {
+	if len(args) == 0 || len(args)%2 != 0 {
+		return wrongArity("mset")
+	}
+
+	for i := 0; i < len(args); i += 2 {
+		store.Set(args[i], args[i+1])
+	}
+	return Value{typ: typeString, str: "OK"}
+}
+
+func mgetCommand(args []string, store *Store) Value {
+	if len(args) == 0 {
+		return wrongArity("mget")
+	}
+
+	values := make([]Value, 0, len(args))
+	for _, key := range args {
+		value, ok := store.Get(key)
+		if !ok {
+			values = append(values, Value{typ: typeNull})
+			continue
+		}
+		values = append(values, Value{typ: typeBulk, bulk: value})
+	}
+	return Value{typ: typeArray, array: values}
+}
+
+func incrCommand(args []string, store *Store) Value {
+	if len(args) != 1 {
+		return wrongArity("incr")
+	}
+	return incrementCommand(args[0], 1, store)
+}
+
+func decrCommand(args []string, store *Store) Value {
+	if len(args) != 1 {
+		return wrongArity("decr")
+	}
+	return incrementCommand(args[0], -1, store)
+}
+
+func incrementCommand(key string, delta int, store *Store) Value {
+	value, err := store.Increment(key, delta)
+	if err != nil {
+		return protocolError("ERR value is not an integer or out of range")
+	}
+	return Value{typ: typeInteger, num: value}
+}
+
 func delCommand(args []string, store *Store) Value {
 	if len(args) == 0 {
 		return wrongArity("del")
@@ -108,6 +192,54 @@ func existsCommand(args []string, store *Store) Value {
 		return wrongArity("exists")
 	}
 	return Value{typ: typeInteger, num: store.Exists(args...)}
+}
+
+func expireCommand(args []string, store *Store) Value {
+	if len(args) != 2 {
+		return wrongArity("expire")
+	}
+
+	ttl, ok := parseTTL("EX", args[1])
+	if !ok {
+		return protocolError("ERR invalid expire time in 'expire' command")
+	}
+	if !store.Expire(args[0], ttl) {
+		return Value{typ: typeInteger, num: 0}
+	}
+	return Value{typ: typeInteger, num: 1}
+}
+
+func ttlCommand(args []string, store *Store) Value {
+	if len(args) != 1 {
+		return wrongArity("ttl")
+	}
+	return Value{typ: typeInteger, num: store.TTL(args[0])}
+}
+
+func persistCommand(args []string, store *Store) Value {
+	if len(args) != 1 {
+		return wrongArity("persist")
+	}
+	if !store.Persist(args[0]) {
+		return Value{typ: typeInteger, num: 0}
+	}
+	return Value{typ: typeInteger, num: 1}
+}
+
+func parseTTL(unit, raw string) (time.Duration, bool) {
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+
+	switch strings.ToUpper(unit) {
+	case "EX":
+		return time.Duration(value) * time.Second, true
+	case "PX":
+		return time.Duration(value) * time.Millisecond, true
+	default:
+		return 0, false
+	}
 }
 
 func wrongArity(command string) Value {
